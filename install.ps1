@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = "Stop"
+$ScriptContent = @'
+$ErrorActionPreference = "Stop"
 
 $InstallDir = "$env:LOCALAPPDATA\winfetch\bin"
 if (!(Test-Path $InstallDir)) {
@@ -15,5 +16,13 @@ if ($UserPath -notlike "*$InstallDir*") {
     Write-Host "Added $InstallDir to PATH." -ForegroundColor Green
 }
 
+# Add to current session PATH immediately
+if ($env:PATH -notlike "*$InstallDir*") {
+    $env:PATH += ";$InstallDir"
+}
+
 Write-Host "`nwinfetch installed successfully!" -ForegroundColor Green
-Write-Host "Restart your terminal and type 'winfetch' to launch." -ForegroundColor Yellow
+Write-Host "Type 'winfetch' to launch." -ForegroundColor Yellow
+'@
+
+[System.IO.File]::WriteAllText("$PWD\install.ps1", $ScriptContent, (New-Object System.Text.UTF8Encoding $false))

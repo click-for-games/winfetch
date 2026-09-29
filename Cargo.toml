@@ -1,0 +1,13 @@
+[package]
+name = "winfetch"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+colored = "2.1"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_System_Registry",
+    "Win32_Graphics_Gdi"
+] }

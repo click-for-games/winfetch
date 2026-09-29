@@ -12,12 +12,28 @@ use std::io::{stdout, Write};
 use std::os::windows::ffi::OsStringExt;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, HORZRES, VERTRES};
+use windows_sys::Win32::System::Console::{
+    GetStdHandle, GetConsoleMode, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+};
 use windows_sys::Win32::System::Registry::{
     RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
 };
 use windows_sys::Win32::System::SystemInformation::{
     GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
 };
+
+/// Forces Windows Console to process ANSI escape sequences (fixes raw \x1b[1;36m output)
+fn enable_ansi_support() {
+    unsafe {
+        let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        if handle != 0 && handle != -1isize {
+            let mut mode = 0u32;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        }
+    }
+}
 
 fn get_reg_string(key_path: &str, value_name: &str) -> String {
     let subkey: Vec<u16> = key_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -83,7 +99,7 @@ fn get_ram_info() -> String {
             let used_gb = (mem_status.ullTotalPhys - mem_status.ullAvailPhys) as f64 / 1024.0 / 1024.0 / 1024.0;
             let total_gb = mem_status.ullTotalPhys as f64 / 1024.0 / 1024.0 / 1024.0;
             let pct = mem_status.dwMemoryLoad;
-            format!("{:.2} MiB / {:.2} MiB ({}%)", used_gb * 1024.0, total_gb * 1024.0, pct)
+            format!("{:.2} GiB / {:.2} GiB ({}%)", used_gb, total_gb, pct)
         } else {
             "Unknown".to_string()
         }
@@ -125,8 +141,7 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
 
     let (cols, rows) = crossterm::terminal::size()?;
     let mut rng = rand::thread_rng();
-    
-    // Create drops across columns
+
     let mut drops: Vec<i16> = (0..cols).map(|_| rng.gen_range(-20..0)).collect();
     let chars = ['d', 'i', 'h', 'D', 'I', 'H', '1', '0'];
 
@@ -143,10 +158,7 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
             let y = drops[x as usize];
             if y >= 0 && y < rows as i16 {
                 let ch = chars[rng.gen_range(0..chars.len())];
-                execute!(
-                    stdout,
-                    cursor::MoveTo(x, y as u16),
-                )?;
+                execute!(stdout, cursor::MoveTo(x, y as u16))?;
                 if rng.gen_bool(0.1) {
                     print!("{}", ch.to_string().bold().white());
                 } else {
@@ -154,7 +166,6 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Fade trailing characters
             let tail = y - 12;
             if tail >= 0 && tail < rows as i16 {
                 execute!(stdout, cursor::MoveTo(x, tail as u16))?;
@@ -175,6 +186,9 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
+    // Enable VT processing immediately for clean colors
+    enable_ansi_support();
+
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 && args[1] == "dih" {
         if let Err(e) = run_dih_matrix() {
@@ -188,17 +202,14 @@ fn main() {
     let username = env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
     let computername = env::var("COMPUTERNAME").unwrap_or_else(|_| "pc".to_string());
 
-    // Linux-style colored windows logo
     let logo = vec![
-        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
-        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
-        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
-        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
-        "                                                      ".to_string(),
-        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
-        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
-        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
-        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
+        format!("{}  {}", "█████████".red().bold(), "█████████".green().bold()),
+        format!("{}  {}", "█████████".red().bold(), "█████████".green().bold()),
+        format!("{}  {}", "█████████".red().bold(), "█████████".green().bold()),
+        "                       ".to_string(),
+        format!("{}  {}", "█████████".blue().bold(), "█████████".yellow().bold()),
+        format!("{}  {}", "█████████".blue().bold(), "█████████".yellow().bold()),
+        format!("{}  {}", "█████████".blue().bold(), "█████████".yellow().bold()),
     ];
 
     let header = format!("{}@{}", username.cyan().bold(), computername.cyan().bold());
@@ -206,26 +217,14 @@ fn main() {
 
     let colors_primary = format!(
         "{}{}{}{}{}{}{}{}",
-        "   ".on_black(),
-        "   ".on_red(),
-        "   ".on_green(),
-        "   ".on_yellow(),
-        "   ".on_blue(),
-        "   ".on_magenta(),
-        "   ".on_cyan(),
-        "   ".on_white()
-    );
-
-    let colors_bright = format!(
-        "{}{}{}{}{}{}{}{}",
-        "   ".on_bright_black(),
-        "   ".on_bright_red(),
-        "   ".on_bright_green(),
-        "   ".on_bright_yellow(),
-        "   ".on_bright_blue(),
-        "   ".on_bright_magenta(),
-        "   ".on_bright_cyan(),
-        "   ".on_bright_white()
+        "  ".on_black(),
+        "  ".on_red(),
+        "  ".on_green(),
+        "  ".on_yellow(),
+        "  ".on_blue(),
+        "  ".on_magenta(),
+        "  ".on_cyan(),
+        "  ".on_white()
     );
 
     let info = vec![
@@ -233,16 +232,14 @@ fn main() {
         border,
         format!("{}: {}", "OS".cyan().bold(), get_os_info()),
         format!("{}: {}", "Host".cyan().bold(), get_motherboard_info()),
-        format!("{}: {}", "Kernel".cyan().bold(), "NT 10.0.19045 x86_64"),
         format!("{}: {}", "Uptime".cyan().bold(), get_uptime()),
-        format!("{}: {}", "Shell".cyan().bold(), env::var("ComSpec").unwrap_or_default()),
         format!("{}: {}", "Resolution".cyan().bold(), get_resolution()),
         format!("{}: {}", "CPU".cyan().bold(), get_cpu_info()),
         format!("{}: {}", "GPU".cyan().bold(), get_gpu_info()),
         format!("{}: {}", "Memory".cyan().bold(), get_ram_info()),
+        format!("{}: {}", "Shell".cyan().bold(), env::var("ComSpec").unwrap_or_default()),
         "".to_string(),
         colors_primary,
-        colors_bright,
     ];
 
     let max_lines = logo.len().max(info.len());
@@ -250,7 +247,7 @@ fn main() {
         let left = if i < logo.len() {
             &logo[i]
         } else {
-            "                                                      "
+            "                       "
         };
         let right = if i < info.len() { &info[i] } else { "" };
         println!("{}   {}", left, right);

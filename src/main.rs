@@ -1,13 +1,22 @@
 use colored::*;
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use rand::Rng;
 use std::env;
 use std::ffi::OsString;
+use std::io::{stdout, Write};
 use std::os::windows::ffi::OsStringExt;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, HORZRES, VERTRES};
 use windows_sys::Win32::System::Registry::{
     RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
 };
 use windows_sys::Win32::System::SystemInformation::{
-    GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
 };
 
 fn get_reg_string(key_path: &str, value_name: &str) -> String {
@@ -48,10 +57,15 @@ fn get_cpu_info() -> String {
 }
 
 fn get_os_info() -> String {
-    get_reg_string(
-        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
-        "ProductName",
-    )
+    let name = get_reg_string("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName");
+    let build = get_reg_string("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuild");
+    format!("{} x86_64 (Build {})", name, build)
+}
+
+fn get_motherboard_info() -> String {
+    let vendor = get_reg_string("HARDWARE\\DESCRIPTION\\System\\BIOS", "BaseBoardManufacturer");
+    let product = get_reg_string("HARDWARE\\DESCRIPTION\\System\\BIOS", "BaseBoardProduct");
+    format!("{} {}", vendor, product)
 }
 
 fn get_gpu_info() -> String {
@@ -68,7 +82,8 @@ fn get_ram_info() -> String {
         if GlobalMemoryStatusEx(&mut mem_status) != 0 {
             let used_gb = (mem_status.ullTotalPhys - mem_status.ullAvailPhys) as f64 / 1024.0 / 1024.0 / 1024.0;
             let total_gb = mem_status.ullTotalPhys as f64 / 1024.0 / 1024.0 / 1024.0;
-            format!("{:.2} GB / {:.2} GB ({})", used_gb, total_gb, format!("{}%", mem_status.dwMemoryLoad).cyan())
+            let pct = mem_status.dwMemoryLoad;
+            format!("{:.2} MiB / {:.2} MiB ({}%)", used_gb * 1024.0, total_gb * 1024.0, pct)
         } else {
             "Unknown".to_string()
         }
@@ -88,56 +103,159 @@ fn get_resolution() -> String {
     }
 }
 
+fn get_uptime() -> String {
+    unsafe {
+        let ms = GetTickCount64();
+        let secs = ms / 1000;
+        let mins = (secs / 60) % 60;
+        let hours = (secs / 3600) % 24;
+        let days = secs / 86400;
+        if days > 0 {
+            format!("{} days, {} hours, {} mins", days, hours, mins)
+        } else {
+            format!("{} hours, {} mins", hours, mins)
+        }
+    }
+}
+
+fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+
+    let (cols, rows) = crossterm::terminal::size()?;
+    let mut rng = rand::thread_rng();
+    
+    // Create drops across columns
+    let mut drops: Vec<i16> = (0..cols).map(|_| rng.gen_range(-20..0)).collect();
+    let chars = ['d', 'i', 'h', 'D', 'I', 'H', '1', '0'];
+
+    loop {
+        if event::poll(Duration::from_millis(40))? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc || key.code == KeyCode::Char('c') {
+                    break;
+                }
+            }
+        }
+
+        for x in 0..cols {
+            let y = drops[x as usize];
+            if y >= 0 && y < rows as i16 {
+                let ch = chars[rng.gen_range(0..chars.len())];
+                execute!(
+                    stdout,
+                    cursor::MoveTo(x, y as u16),
+                )?;
+                if rng.gen_bool(0.1) {
+                    print!("{}", ch.to_string().bold().white());
+                } else {
+                    print!("{}", ch.to_string().bold().green());
+                }
+            }
+
+            // Fade trailing characters
+            let tail = y - 12;
+            if tail >= 0 && tail < rows as i16 {
+                execute!(stdout, cursor::MoveTo(x, tail as u16))?;
+                print!(" ");
+            }
+
+            drops[x as usize] += 1;
+            if drops[x as usize] > rows as i16 + 15 {
+                drops[x as usize] = rng.gen_range(-10..0);
+            }
+        }
+        stdout.flush()?;
+    }
+
+    execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
+    disable_raw_mode()?;
+    Ok(())
+}
+
 fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 && args[1] == "dih" {
+        if let Err(e) = run_dih_matrix() {
+            eprintln!("Error playing matrix: {}", e);
+        }
+        return;
+    }
+
+    let start = Instant::now();
+
     let username = env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
     let computername = env::var("COMPUTERNAME").unwrap_or_else(|_| "pc".to_string());
 
+    // Linux-style colored windows logo
     let logo = vec![
-        "  ████████   ████████  ".cyan().bold(),
-        "  ████████   ████████  ".cyan().bold(),
-        "  ████████   ████████  ".cyan().bold(),
-        "                       ".normal(),
-        "  ████████   ████████  ".cyan().bold(),
-        "  ████████   ████████  ".cyan().bold(),
-        "  ████████   ████████  ".cyan().bold(),
+        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
+        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
+        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
+        format!("{}  {}", "████████████████████████".red().bold(), "████████████████████████".green().bold()),
+        "                                                      ".to_string(),
+        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
+        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
+        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
+        format!("{}  {}", "████████████████████████".blue().bold(), "████████████████████████".yellow().bold()),
     ];
 
     let header = format!("{}@{}", username.cyan().bold(), computername.cyan().bold());
     let border = "-".repeat(username.len() + computername.len() + 1);
 
-    let colors = format!(
+    let colors_primary = format!(
         "{}{}{}{}{}{}{}{}",
-        "██".black(),
-        "██".red(),
-        "██".green(),
-        "██".yellow(),
-        "██".blue(),
-        "██".magenta(),
-        "██".cyan(),
-        "██".white()
+        "   ".on_black(),
+        "   ".on_red(),
+        "   ".on_green(),
+        "   ".on_yellow(),
+        "   ".on_blue(),
+        "   ".on_magenta(),
+        "   ".on_cyan(),
+        "   ".on_white()
+    );
+
+    let colors_bright = format!(
+        "{}{}{}{}{}{}{}{}",
+        "   ".on_bright_black(),
+        "   ".on_bright_red(),
+        "   ".on_bright_green(),
+        "   ".on_bright_yellow(),
+        "   ".on_bright_blue(),
+        "   ".on_bright_magenta(),
+        "   ".on_bright_cyan(),
+        "   ".on_bright_white()
     );
 
     let info = vec![
         header,
         border,
-        format!("{}: {}", "OS".bold().cyan(), get_os_info()),
-        format!("{}: {}", "Resolution".bold().cyan(), get_resolution()),
-        format!("{}: {}", "CPU".bold().cyan(), get_cpu_info()),
-        format!("{}: {}", "GPU".bold().cyan(), get_gpu_info()),
-        format!("{}: {}", "Memory".bold().cyan(), get_ram_info()),
-        format!("{}: {}", "Shell".bold().cyan(), env::var("ComSpec").unwrap_or_default()),
+        format!("{}: {}", "OS".cyan().bold(), get_os_info()),
+        format!("{}: {}", "Host".cyan().bold(), get_motherboard_info()),
+        format!("{}: {}", "Kernel".cyan().bold(), "NT 10.0.19045 x86_64"),
+        format!("{}: {}", "Uptime".cyan().bold(), get_uptime()),
+        format!("{}: {}", "Shell".cyan().bold(), env::var("ComSpec").unwrap_or_default()),
+        format!("{}: {}", "Resolution".cyan().bold(), get_resolution()),
+        format!("{}: {}", "CPU".cyan().bold(), get_cpu_info()),
+        format!("{}: {}", "GPU".cyan().bold(), get_gpu_info()),
+        format!("{}: {}", "Memory".cyan().bold(), get_ram_info()),
         "".to_string(),
-        colors,
+        colors_primary,
+        colors_bright,
     ];
 
     let max_lines = logo.len().max(info.len());
     for i in 0..max_lines {
         let left = if i < logo.len() {
-            logo[i].to_string()
+            &logo[i]
         } else {
-            "                       ".to_string()
+            "                                                      "
         };
         let right = if i < info.len() { &info[i] } else { "" };
         println!("{}   {}", left, right);
     }
+
+    let duration = start.elapsed();
+    println!("\n{}", format!("Fetched in {:.2?}", duration).bright_black().italic());
 }

@@ -13,7 +13,8 @@ use std::os::windows::ffi::OsStringExt;
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, HORZRES, VERTRES};
 use windows_sys::Win32::System::Console::{
-    GetStdHandle, GetConsoleMode, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+    GetConsoleMode, GetStdHandle, SetConsoleMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+    STD_OUTPUT_HANDLE,
 };
 use windows_sys::Win32::System::Registry::{
     RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
@@ -22,8 +23,11 @@ use windows_sys::Win32::System::SystemInformation::{
     GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
 };
 
-/// Forces Windows Console to process ANSI escape sequences (fixes raw \x1b[1;36m output)
+/// Forces Windows Console to process ANSI escape sequences
 fn enable_ansi_support() {
+    colored::control::set_virtual_terminal(true).ok();
+    colored::control::set_override(true);
+
     unsafe {
         let handle = GetStdHandle(STD_OUTPUT_HANDLE);
         if handle != 0 && handle != -1isize {
@@ -52,7 +56,8 @@ fn get_reg_string(key_path: &str, value_name: &str) -> String {
                 &mut buf_type,
                 buf.as_mut_ptr(),
                 &mut buf_len,
-            ) == 0 {
+            ) == 0
+            {
                 let u16_slice = std::slice::from_raw_parts(
                     buf.as_ptr() as *const u16,
                     (buf_len / 2) as usize,
@@ -96,10 +101,11 @@ fn get_ram_info() -> String {
         let mut mem_status: MEMORYSTATUSEX = std::mem::zeroed();
         mem_status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
         if GlobalMemoryStatusEx(&mut mem_status) != 0 {
-            let used_gb = (mem_status.ullTotalPhys - mem_status.ullAvailPhys) as f64 / 1024.0 / 1024.0 / 1024.0;
+            let used_gb =
+                (mem_status.ullTotalPhys - mem_status.ullAvailPhys) as f64 / 1024.0 / 1024.0 / 1024.0;
             let total_gb = mem_status.ullTotalPhys as f64 / 1024.0 / 1024.0 / 1024.0;
             let pct = mem_status.dwMemoryLoad;
-            format!("{:.2} GiB / {:.2} GiB ({}%)", used_gb, total_gb, pct)
+            format!("{:.2} GB / {:.2} GB ({}%)", used_gb, total_gb, pct)
         } else {
             "Unknown".to_string()
         }
@@ -148,7 +154,10 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         if event::poll(Duration::from_millis(40))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc || key.code == KeyCode::Char('c') {
+                if key.code == KeyCode::Char('q')
+                    || key.code == KeyCode::Esc
+                    || key.code == KeyCode::Char('c')
+                {
                     break;
                 }
             }
@@ -186,7 +195,6 @@ fn run_dih_matrix() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    // Enable VT processing immediately for clean colors
     enable_ansi_support();
 
     let args: Vec<String> = env::args().collect();
